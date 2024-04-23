@@ -297,7 +297,12 @@ public class FileSystem {
             UserData file = deserializeUserData(lastOpenedFile.sector, lastOpenedFile.name);
 
             byte[] toRead = new byte[n];
-            System.arraycopy(file.data, 0, toRead, 0, n);
+
+            if(lastOpenedFile.pointerBase == 0) {
+                System.arraycopy(file.data, lastOpenedFile.pointerOffset, toRead, 0, n);
+            } else if(lastOpenedFile.pointerBase == -1){
+                System.arraycopy(file.data, file.size + lastOpenedFile.pointerOffset, toRead, 0, n);
+            }
 
             for (byte i : toRead) {
                 if (i != 0) {
@@ -461,7 +466,7 @@ public class FileSystem {
                 Directory subDirectory = deserializeDirectory(linkToSector, name);
                 displayTree(subDirectory, depth + 1);
             } else if (fileType == 'U') {
-                System.out.println(getIndent(depth + 1) + name + " (File)");
+                System.out.println(getIndent(depth + 1) + name);
             } else if (fileType == 'F') {
                 break;
             }
