@@ -1,11 +1,16 @@
 public class OpenFile {
-    File file;
+    int sector;
     char mode; // 'I' for input, 'O' for output, 'U' for update
-    int position; // Pointer to the next byte to be read or written
+    String name;
+    int pointerBase;
+    int pointerOffset;
 
-    public OpenFile(File file, char mode) {
-        this.file = file;
+
+    public OpenFile(int sector, char mode, String name) {
+        this.sector = sector;
         this.mode = mode;
-        this.position = 0; // Default to start of file
+        this.name = name;
+        this.pointerBase = 0;
+        this.pointerOffset = 0;
     }
 }

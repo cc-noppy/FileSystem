@@ -1,34 +1,19 @@
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 class Directory extends File {
-    private List<File> files;  // Contains either Directory or UserData instances
+    public int back;
+    public int forward;
+    public int free;
+    public int filler;
+    public byte[] data = new byte[496];
 
     public Directory(String name, int firstBlock) {
         super(name, 'D', firstBlock);
-        files = new ArrayList<>();
-    }
-
-    public List<File> getFiles() {
-        return this.files;
-    }
-
-    @Override
-    public void addFile(File file) {
-        this.files.add(file);
-    }
-
-    public void removeFile(String name){
-        files.removeIf(f -> f.name.equals(name));
-    }
-
-    @Override
-    public File getFile(String name) {
-        for (File file : files) {
-            if (file.name.equals(name)) {
-                return file;
-            }
-        }
-        return null;  // File not found
+        this.back = -1;
+        this.forward = -1;
+        this.free = this.firstBlock;
+        this.filler = -1;
     }
 }

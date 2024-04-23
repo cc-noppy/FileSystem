@@ -1,0 +1,36 @@
+Each sector is its own file (dictionary or userdata).
+
+Disk:
+512 bytes per sector
+
+Directory Sectors:
+each file logged into the sector will POINT to the file and its respective sector.
+
+initial variables:
+4 bytes for back
+4 bytes for forward
+4 bytes for free
+4 bytes for filler
+
+for each file in each directory:
+1 byte for file type.
+9 bytes for the name.
+4 byte for the link to the sector.
+2 byte for the size.
+
+31 x 16 + 16
+
+If the contents exceed 496 bytes, we will have to utilize
+another sector with the same format but with different back and forward values.
+
+-----------------------------------------------------------------
+
+UserData Sectors:
+UserData content will be stored in blocks (504 bytes each).
+
+4 bytes for backwards block sector num (on initialization -1)
+4 bytes for forward block sector num (on initialization -1)
+504 bytes for content.
+
+If the contents exceed 504 bytes, we will have to utilize
+another sector with the same format but with different back and forward values.

@@ -1,7 +1,7 @@
 import java.util.Arrays;
 
 public class Disk {
-    private final byte[][] sectors;
+    public final byte[][] sectors;
     private final boolean[] blockUsed;
     public static final int SECTOR_SIZE = 512;
     public final int numSectors;
@@ -19,16 +19,6 @@ public class Disk {
         for(int i = 0; i < numSectors; i++){
             Arrays.fill(sectors[i], (byte) 0); //fill all sectors with zero
         }
-    }
-
-    public int sectorUsage(int sectorNumber) {
-        int count = 0;
-        for (byte b : sectors[sectorNumber]) {
-            if (b != 0) {
-                count++;
-            }
-        }
-        return count;
     }
 
     public byte[] diskRead(int sectorNumber){
@@ -57,5 +47,9 @@ public class Disk {
             }
         }
         return -1; // No free blocks available
+    }
+
+    public void deallocateBlock(int index) {
+        blockUsed[index] = false;
     }
 }

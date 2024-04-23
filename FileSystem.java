@@ -1,9 +1,9 @@
 import java.io.UnsupportedEncodingException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
+
+// TODO : updated dictionary sizes everytime you update them!, Fix the user file system
 
 public class FileSystem {
     private final Disk disk;
@@ -14,7 +14,7 @@ public class FileSystem {
     public FileSystem(Disk disk) { //initialized the disk, the openFiles map, and the root directory!
         this.disk = disk;
 
-        root = new Directory("root", 0); // allocates the root directory!
+        root = new Directory("root", disk.allocateBlock()); // allocates the root directory!
         serializeDirectory(root, 0);
     }
 
@@ -24,254 +24,511 @@ public class FileSystem {
 
         Directory currentDirectory = root;
         for (int i = 0; i < parts.length - 1; i++) {
-            if (parts[i].isEmpty()) continue; // Skip empty parts from paths like "/dir/"
+            if (parts[i].isEmpty()) continue; // Skip root
+            boolean found = false;
 
-            File subDir = currentDirectory.getFile(parts[i]);
-            if (subDir instanceof Directory) {
-                currentDirectory = (Directory) subDir;
-            } else {
-                System.out.println("Invalid path: " + parts[i] + " is not a directory.");
+            byte[] subDirName = new byte[9];
+            byte[] dirPart = parts[i].getBytes();
+            System.arraycopy(dirPart, 0, subDirName, 0, Math.min(dirPart.length, 9));
+
+            int blockIndex = currentDirectory.firstBlock;
+            nameLoop:
+            while (blockIndex != -1) {
+                byte[] diskDir = disk.diskRead(blockIndex);
+                List<byte[]> dirEntries = deserializeDirectoryData(diskDir);
+
+                for (byte[] entry : dirEntries) {
+                    byte[] byteName = new byte[9];
+                    System.arraycopy(entry, 1, byteName, 0, 9);
+
+                    byte[] sector = new byte[4];
+                    System.arraycopy(entry, 10, sector, 0, 4);
+
+                    if (Arrays.equals(subDirName, byteName)) {
+                        found = true;
+                        currentDirectory = deserializeDirectory(bytesToInt(sector), bytesToString(byteName));
+
+                        break nameLoop;
+                    } else {
+                        blockIndex = currentDirectory.forward;
+                    }
+                }
+            }
+
+            if (!found) {
+                System.out.println("Sub-directory or path not found.");
                 return;
             }
         }
 
-        File existing = currentDirectory.getFile(name);
-        if (existing != null) {
-            System.out.println("A file already exists with the name: " + name + " in the path: " + path);
-            return;
-        }
-
-        int blockIndex = findFreeBlock();
-        if (blockIndex == -1) {
+        int freeIndex = findFreeBlock();
+        if (freeIndex == -1) {
             System.out.println("No free blocks available to allocate.");
             return;
         }
 
-        if (fileType == 'D') { // If the file type is a directory
-            Directory newDirectory = new Directory(name, blockIndex);
-            currentDirectory.addFile(newDirectory);
-            serializeDirectory(newDirectory, blockIndex); // Serialize new directory structure to disk
+        if (fileType == 'D') {
+            Directory newDirectory = new Directory(name, freeIndex);
+            serializeDirectory(newDirectory, freeIndex);
+            updateDirectoryEntries(currentDirectory, 'D', name, freeIndex, (short) 0);
 
-        } else if (fileType == 'U') { // If the file type is a user data file
-            UserData newUserFile = new UserData(name, blockIndex);
-            currentDirectory.addFile(newUserFile);
-            serializeUserData(newUserFile, blockIndex); // Initialize and serialize user data file to disk
+            System.out.println("Allocated at sector: " + freeIndex);
+
+            byte[] diskDir = disk.diskRead(freeIndex);
+//            System.out.println("directory initialization: " + Arrays.toString(diskDir));
+
+        } else if (fileType == 'U') {
+            UserData newUserFile = new UserData(name, freeIndex);
+            serializeUserData(newUserFile, freeIndex);
+            updateDirectoryEntries(currentDirectory, 'U', name, freeIndex, (short) 0);
+
+            System.out.println("Allocated at sector: " + freeIndex);
+
+            byte[] diskDir = disk.diskRead(freeIndex);
+//            System.out.println("user file initialization: " + Arrays.toString(diskDir));
         }
     }
 
     public void open(String path, char mode) {
-        String[] parts = path.split("/");
-        String fileName = parts[parts.length - 1];
-        Directory currentDirectory = root;
+        if (!(mode == 'I' | mode == 'O' | mode == 'U')) {
+            System.out.println("Mode is not valid!");
+            return;
+        }
 
+        String[] parts = path.split("/");
+        String name = parts[parts.length - 1];
+
+        Directory currentDirectory = deserializeDirectory(0, "root");
         for (int i = 0; i < parts.length - 1; i++) {
-            if (parts[i].isEmpty() || parts[i].equals(".")) continue;
-            File file = currentDirectory.getFile(parts[i]);
-            if (file instanceof Directory) {
-                currentDirectory = (Directory) file;
-            } else {
-                System.out.println("Path is invalid, " + parts[i] + " is not a directory.");
+            if (parts[i].isEmpty()) continue; // Skip root
+            boolean found = false;
+
+            byte[] subDirName = new byte[9];
+            byte[] dirPart = parts[i].getBytes();
+            System.arraycopy(dirPart, 0, subDirName, 0, Math.min(dirPart.length, 9));
+
+            int blockIndex = currentDirectory.firstBlock;
+            nameLoop:
+            while (blockIndex != -1) {
+                byte[] diskDir = disk.diskRead(blockIndex);
+                List<byte[]> dirEntries = deserializeDirectoryData(diskDir);
+
+                for (byte[] entry : dirEntries) {
+                    byte[] byteName = new byte[9];
+                    System.arraycopy(entry, 1, byteName, 0, 9);
+
+                    byte[] sector = new byte[4];
+                    System.arraycopy(entry, 10, sector, 0, 4);
+
+                    if (Arrays.equals(subDirName, byteName)) {
+                        found = true;
+                        currentDirectory = deserializeDirectory(bytesToInt(sector), bytesToString(byteName));
+
+                        break nameLoop;
+                    } else {
+                        blockIndex = currentDirectory.forward;
+                    }
+                }
+            }
+
+            if (!found) {
+                System.out.println("Sub-directory or path not found.");
                 return;
             }
         }
 
-        File targetFile = currentDirectory.getFile(fileName);
-        if (targetFile == null) {
-            System.out.println("File does not exist: " + path);
-            return;
-        }
+        boolean fileFound = false;
+        List<byte[]> des = deserializeDirectoryData(currentDirectory.data);
+        for (byte[] entry : des) {
 
-        if (targetFile instanceof UserData) {
-            OpenFile openFile = new OpenFile(targetFile, mode);
-            if (mode == 'O') {
-                openFile.position = targetFile.size; // Position at the end for output mode
-            } else {
-                openFile.position = 0; // Position at the start for input and update mode
+            byte[] byteName = new byte[9];
+            System.arraycopy(entry, 1, byteName, 0, 9);
+
+            byte[] sector = new byte[4];
+            System.arraycopy(entry, 10, sector, 0, 4);
+
+            if (bytesToString(byteName).equals(name)) {
+                this.lastOpenedFile = new OpenFile(bytesToInt(sector), mode, name);
+                System.out.println("Opened file '" + bytesToString(byteName) + "' in mode " + mode);
+                fileFound = true;
+                break;
             }
 
-            lastOpenedFile = openFile;
-
-            System.out.println(fileName + " has been opened!");
-
-        } else {
-            System.out.println("Cannot open directories or invalid file types for reading or writing.");
         }
+        if (!fileFound) {
+            System.out.println("Cannot find file!");
+        }
+    }
+
+    public void delete(String path) { // TODO : finish removing har har
+        String[] parts = path.split("/");
+        String name = parts[parts.length - 1];
+
+        Directory currentDirectory = deserializeDirectory(0, "root");
+        for (int i = 0; i < parts.length - 1; i++) {
+            if (parts[i].isEmpty()) continue; // Skip root
+            boolean found = false;
+
+            byte[] subDirName = new byte[9];
+            byte[] dirPart = parts[i].getBytes();
+            System.arraycopy(dirPart, 0, subDirName, 0, Math.min(dirPart.length, 9));
+
+            int blockIndex = currentDirectory.firstBlock;
+            nameLoop:
+            while (blockIndex != -1) {
+                byte[] diskDir = disk.diskRead(blockIndex);
+                List<byte[]> dirEntries = deserializeDirectoryData(diskDir);
+
+                for (byte[] entry : dirEntries) {
+                    byte[] byteName = new byte[9];
+                    System.arraycopy(entry, 1, byteName, 0, 9);
+
+                    byte[] sector = new byte[4];
+                    System.arraycopy(entry, 10, sector, 0, 4);
+
+                    if (Arrays.equals(subDirName, byteName)) {
+                        found = true;
+                        currentDirectory = deserializeDirectory(bytesToInt(sector), bytesToString(byteName));
+
+                        break nameLoop;
+                    } else {
+                        blockIndex = currentDirectory.forward;
+                    }
+                }
+            }
+
+            if (!found) {
+                System.out.println("Sub-directory or path not found.");
+                return;
+            }
+        }
+
+        boolean fileFound = false;
+        int count = 1;
+        String s = Character.toString('F');
+        List<byte[]> des = deserializeDirectoryData(currentDirectory.data);
+        for (byte[] entry : des) {
+
+            byte[] byteName = new byte[9];
+            System.arraycopy(entry, 1, byteName, 0, 9);
+
+            byte[] sector = new byte[4];
+            System.arraycopy(entry, 10, sector, 0, 4);
+
+            if (bytesToString(byteName).equals(name)) {
+                fileFound = true;
+                if (entry[0] == 'D') {
+                    Directory del = deserializeDirectory(bytesToInt(sector), "ref");
+                    List<byte[]> dirEntries = deserializeDirectoryData(del.data);
+                    removeZeroFilledArrays(dirEntries);
+
+                    if (dirEntries.isEmpty()) {
+                        disk.sectors[currentDirectory.firstBlock][count * 16] = 70; // 70 = 'F'
+                        disk.deallocateBlock(bytesToInt(sector));
+                        System.out.println("Deleted directory: " + name);
+
+                    } else {
+                        System.out.println("Cannot delete a directory with items in it. " +
+                                "Please empty the directory first.");
+                        break;
+                    }
+                } else {
+
+                    disk.sectors[currentDirectory.firstBlock][count * 16] = 70; // 70 = 'F'
+                    disk.deallocateBlock(bytesToInt(sector));
+                    System.out.println("Deleted user file: " + name);
+                    break;
+                }
+
+            } else {
+                count++;
+            }
+
+        }
+        if (!fileFound) {
+            System.out.println("Cannot find file!");
+        }
+
+    }
+
+    public void seek(int base, int offset) {
+        lastOpenedFile.pointerBase = base;
+        lastOpenedFile.pointerOffset = offset;
     }
 
     public void close() {
-        System.out.println("You closed " + lastOpenedFile.file.name);
-        lastOpenedFile = null;
+        if (lastOpenedFile == null) {
+            System.out.println("You closed the current opened file.");
+            lastOpenedFile = null;
+        } else {
+            System.out.println("No file is open at the moment!");
+        }
     }
 
-    public void delete(String name) {
+    public void write(int n, String str) {
+        if (lastOpenedFile == null) {
+            System.out.println("You need to open a file first!");
+            return;
+        }
 
+        if (lastOpenedFile.mode == 'O' || lastOpenedFile.mode == 'U') {
+            UserData file = deserializeUserData(lastOpenedFile.sector, lastOpenedFile.name);
+            byte[] writeArray = new byte[n];
+            byte[] content = str.getBytes(StandardCharsets.UTF_8);
+
+            // Copies content to write array
+            System.arraycopy(content, 0, writeArray, 0, Math.min(content.length, n));
+
+            // Copies writeArray to data
+            System.arraycopy(writeArray, 0, file.data, 0, n);
+
+            file.size = removeZeroBytes(file.data).length;
+
+            serializeUserData(file, lastOpenedFile.sector);
+
+            System.out.println("You wrote " + str + " on file '" + lastOpenedFile.name + "'.");
+        } else {
+            System.out.println("You aren't in the right mode!");
+        }
     }
 
     public void read(int n) {
-        if (lastOpenedFile == null || (lastOpenedFile.mode != 'I' && lastOpenedFile.mode != 'U')) {
-            System.out.println("No file is open for reading or is not opened in correct mode.");
-            return;
+        if (lastOpenedFile.mode == 'I' || lastOpenedFile.mode == 'U') {
+            UserData file = deserializeUserData(lastOpenedFile.sector, lastOpenedFile.name);
+
+            byte[] toRead = new byte[n];
+            System.arraycopy(file.data, 0, toRead, 0, n);
+
+            for (byte i : toRead) {
+                if (i != 0) {
+                    System.out.print((char) (i & 0xFF));
+                } else {
+                    System.out.println("\nEnd of file.");
+                    return;
+                }
+            }
         }
+        System.out.println("\n");
+    }
 
-        UserData userDataFile = (UserData) lastOpenedFile.file;
-        int currentPosition = lastOpenedFile.position;
-        int fileSize = userDataFile.size;
+    private void serializeDirectory(Directory directory, int blockIndex) {
+        ByteBuffer buffer = ByteBuffer.allocate(Disk.SECTOR_SIZE);
 
-        if (currentPosition >= fileSize) {
-            System.out.println("End of file reached. No more data to read.");
-            return;
-        }
+        int current = blockIndex;
 
-        int bytesToRead = Math.min(n, fileSize - currentPosition);
-        byte[] data = new byte[bytesToRead]; // Buffer to store data to be read
+        do {
+            buffer.putInt(directory.back);
+            buffer.putInt(directory.forward);
+            buffer.putInt(directory.free);
+            buffer.putInt(directory.filler);
 
-        int bytesRead = 0;
-        while (bytesRead < bytesToRead) {
-            int blockIndex = (currentPosition + bytesRead) / Disk.SECTOR_SIZE;
-            int blockOffset = (currentPosition + bytesRead) % Disk.SECTOR_SIZE;
-            byte[] blockData = disk.diskRead(userDataFile.firstBlock + blockIndex);
+            buffer.put(directory.data);
 
-            if (isSectorEmpty(blockData)) {
-                System.out.println("Read from an empty sector at block index: " + (userDataFile.firstBlock + blockIndex));
+            disk.diskWrite(current, buffer.array());
+            buffer.clear();
+
+            if (directory.forward != -1) {
+                current = directory.forward;
             }
 
-            int bytesInBlock = Math.min(bytesToRead - bytesRead, Disk.SECTOR_SIZE - blockOffset);
-            System.arraycopy(blockData, blockOffset, data, bytesRead, bytesInBlock);
-
-            bytesRead += bytesInBlock;
-        }
-
-        lastOpenedFile.position += bytesRead; // Update file pointer
-
-        // Display the read data
-        System.out.write(data, 0, bytesRead);
-        System.out.flush();
-
-        if (bytesRead < n) {
-            System.out.println("\nEnd of file reached after reading " + bytesRead + " bytes.");
-        }
+        } while (directory.forward != -1);
     }
 
-    public void write(int n, byte[] data) throws UnsupportedEncodingException {
-        if (lastOpenedFile == null || lastOpenedFile.mode == 'I') {
-            System.out.println("No file is open for writing or the last opened file is in read mode.");
-            return;
-        }
+    private void serializeUserData(UserData userData, int blockIndex) {
+        ByteBuffer buffer = ByteBuffer.allocate(Disk.SECTOR_SIZE);
 
-        UserData userDataFile = (UserData) lastOpenedFile.file;
+        int current = blockIndex;
 
-        if (data.length < n) {
-            data = Arrays.copyOf(data, n); // Extend data array to n bytes
-            Arrays.fill(data, data.length, n, (byte) ' '); // Fill with spaces if data is shorter than n
-        }
+        do {
+            buffer.putInt(userData.back);
+            buffer.putInt(userData.forward);
 
-        writeToUserData(userDataFile, data, lastOpenedFile.position, n);
-        lastOpenedFile.position += n; // Update the file pointer
+            buffer.put(userData.data);
 
-        // Update the file size in metadata
-        int newFileSize = lastOpenedFile.position;
-        if (newFileSize > userDataFile.size) {
-            userDataFile.size = newFileSize; // Update the size if it has increased
-            serializeUserData(userDataFile, userDataFile.firstBlock); // Persist changes to the disk
 
-            System.out.println("You printed '" + new String(data, StandardCharsets.US_ASCII) + "' onto " + lastOpenedFile.file.name);
-        }
+            disk.diskWrite(current, buffer.array());
+            buffer.clear();
+
+            if (userData.forward != -1) {
+                current = userData.forward;
+            }
+
+        } while (userData.forward != -1);
     }
 
-    public void seek(String name, int position) {
+    private Directory deserializeDirectory(int blockIndex, String name) {
+        byte[] data = disk.diskRead(blockIndex);
+        ByteBuffer buffer = ByteBuffer.wrap(data);
 
+        Directory dir = new Directory(name, blockIndex);
+
+        dir.back = buffer.getInt();
+        dir.forward = buffer.getInt();
+        dir.free = buffer.getInt();
+        dir.filler = buffer.getInt();
+
+        if (buffer.remaining() >= dir.data.length) {
+            buffer.get(dir.data, 0, dir.data.length);
+        } else {
+            System.out.println("Not enough data in buffer to fill the directory data array");
+        }
+
+        return dir;
+    }
+
+    private UserData deserializeUserData(int blockIndex, String name) {
+        byte[] data = disk.diskRead(blockIndex);
+        ByteBuffer buffer = ByteBuffer.wrap(data);
+
+        UserData userData = new UserData(name, blockIndex);
+        userData.back = buffer.getInt();
+        userData.forward = buffer.getInt();
+        buffer.get(userData.data);
+
+        return userData;
+    }
+
+    public List<byte[]> deserializeDirectoryData(byte[] data) {
+        List<byte[]> entries = new ArrayList<>();
+
+        int step = 16;
+        int index = 0;
+
+        while (index < data.length) {
+            byte[] entry = new byte[16];
+            System.arraycopy(data, index, entry, 0, 16);
+            entries.add(entry);
+            index += step;
+        }
+
+        return entries;
+    }
+
+    private void updateDirectoryEntries(Directory directory, char fileType, String name, int blockIndex, short size) {
+        ByteBuffer buffer = ByteBuffer.allocate(16);
+        buffer.put((byte) fileType);
+        buffer.put(Arrays.copyOf(name.getBytes(StandardCharsets.UTF_8), 9));
+        buffer.putInt(blockIndex);
+        buffer.putShort(size);
+
+        int step = 16; //might have to change to 16
+        int index = 16;
+
+        byte[] dir = disk.diskRead(directory.free);
+
+        while (index < dir.length) {
+            if (dir[index] == 0 || dir[index] == 'F') {
+                break;
+            } else {
+                index += step;
+            }
+        }
+
+        System.arraycopy(buffer.array(), 0, dir, index, 16);
     }
 
     private int findFreeBlock() {
         return disk.allocateBlock();
     }
 
-    private void writeToUserData(UserData userData, byte[] data, int position, int writeBytes) {
-        int sectorSize = Disk.SECTOR_SIZE - 8; // Assuming 8 bytes are used for block management
-        int offset = position % sectorSize;
-        int currentBlockIndex = position / sectorSize;
-        int dataIndex = 0;
-        int remainingData = writeBytes;
+    public void displayTree(Directory directory, int depth) throws UnsupportedEncodingException {
+        if (directory == null) return;
+        List<byte[]> entries;
 
-        // Navigate to the correct block or allocate new ones if necessary
-        UserData.Block currentBlock = userData.getOrCreateHead(disk, sectorSize);
-        while (currentBlockIndex > 0) {
-            if (currentBlock.next == null) {
-                currentBlock.next = new UserData.Block(disk.allocateBlock());
-            }
-            currentBlock = currentBlock.next;
-            currentBlockIndex--;
+        if (depth == 0) {
+            System.out.println(getIndent(depth) + "root/");
+            byte[] data = disk.diskRead(0);
+
+
+            entries = deserializeDirectoryData(data);
+            entries.removeIf(FileSystem::isZeroFilled);
+
+        } else {
+            System.out.println(getIndent(depth) + bytesToString(directory.name) + "/");
+
+
+            entries = deserializeDirectoryData(directory.data);
+            entries.removeIf(FileSystem::isZeroFilled);
         }
 
-        // Write data across blocks
-        while (remainingData > 0) {
-            int writeLength = Math.min(sectorSize - offset, remainingData);
-            System.arraycopy(data, dataIndex, currentBlock.data, offset, writeLength);
+        for (byte[] entry : entries) {
+            char fileType = (char) entry[0];
+            byte[] nameBytes = Arrays.copyOfRange(entry, 1, 10);
+            String name = bytesToString(nameBytes).trim();
+            int linkToSector = bytesToInt(Arrays.copyOfRange(entry, 10, 14));
 
-            disk.diskWrite(currentBlock.blockIndex, currentBlock.data);
-
-            dataIndex += writeLength;
-            remainingData -= writeLength;
-            offset = 0; // Reset offset for next blocks
-
-            if (remainingData > 0) {
-                if (currentBlock.next == null) {
-                    currentBlock.next = new UserData.Block(disk.allocateBlock());
-                }
-                currentBlock = currentBlock.next;
-            }
-        }
-    }
-
-    private void serializeDirectory(Directory directory, int blockIndex) {
-        // Assume serialization logic to disk for a directory
-        // This would convert directory metadata and file entries to bytes and write to disk
-        byte[] data = convertDirectoryToBytes(directory);
-        disk.diskWrite(blockIndex, data);
-    }
-
-    private void serializeUserData(UserData userData, int blockIndex) {
-        byte[] data = new byte[Disk.SECTOR_SIZE]; // Simple example, real implementation needed
-        ByteBuffer buffer = ByteBuffer.wrap(data);
-        buffer.putInt(userData.size); // Example: store the size at the start of the sector
-        disk.diskWrite(blockIndex, buffer.array());
-    }
-
-    private byte[] convertDirectoryToBytes(Directory directory) {
-        // Convert directory details to bytes; for example, list of files, metadata, etc.
-        ByteBuffer buffer = ByteBuffer.allocate(Disk.SECTOR_SIZE);
-        for (File file : directory.getFiles()) {
-            if (buffer.remaining() < 16) break; // Check space for entry
-            buffer.put((byte)(file instanceof Directory ? 'D' : 'U'));
-            byte[] nameBytes = file.name.getBytes();
-            buffer.put(nameBytes);
-            buffer.position(buffer.position() + 10 - nameBytes.length); // Pad the name to 10 bytes
-            buffer.putInt(file.firstBlock);
-            buffer.putInt(file.size);
-        }
-        return buffer.array();
-    }
-
-    private boolean isSectorEmpty(byte[] sectorData) {
-//        for (byte b : sectorData) {
-//            if (b != 0) return false; // If any byte is not zero, the sector isn't empty
-//        }
-
-        return sectorData[20] == 0; // All bytes are zero, sector is empty
-    }
-
-    public void printFileTree() {
-        printDirectory(root, ""); // Start from the root with no indentation
-    }
-
-    private void printDirectory(Directory dir, String indent) {
-        System.out.println(indent + dir.name + "/"); // Print the directory name
-        for (File file : dir.getFiles()) {
-            if (file instanceof Directory) {
-                printDirectory((Directory) file, indent + "    "); // Recursively print subdirectories
-            } else {
-                System.out.println(indent + "    " + file.name); // Print file name
+            if (fileType == 'D') {
+                Directory subDirectory = deserializeDirectory(linkToSector, name);
+                displayTree(subDirectory, depth + 1);
+            } else if (fileType == 'U') {
+                System.out.println(getIndent(depth + 1) + name + " (File)");
+            } else if (fileType == 'F') {
+                break;
             }
         }
+    }
+
+    private String getIndent(int depth) {
+        return " ".repeat(depth * 4); // 4 spaces per depth level
+    }
+
+    public static int bytesToInt(byte[] byteList) {
+        if (byteList == null || byteList.length != 4) {
+            throw new IllegalArgumentException("List must contain exactly 4 bytes");
+        }
+
+        int num = 0;
+        for (int i = 0; i < 4; i++) {
+            num |= (byteList[i] & 0xFF) << (8 * (3 - i));
+        }
+        return num;
+    }
+
+    public static String bytesToString(byte[] byteList) {
+        if (byteList == null) {
+            throw new IllegalArgumentException("Byte list must not be null");
+        }
+
+        int actualLength = 0;
+        for (byte b : byteList) {
+            if (b != 0) {
+                actualLength += 1;
+            }
+        }
+
+        // Create a string from the byte array using UTF-8 encoding
+        return new String(byteList, 0, actualLength, StandardCharsets.UTF_8);
+    }
+
+    public static void removeZeroFilledArrays(List<byte[]> listOfArrays) {
+        // Use an iterator to safely remove elements while iterating
+
+        listOfArrays.removeIf(FileSystem::isZeroFilled);
+    }
+
+    private static boolean isZeroFilled(byte[] array) {
+        for (byte b : array) {
+            if (b != 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static byte[] removeZeroBytes(byte[] original) {
+        List<Byte> nonZeroBytes = new ArrayList<>();
+
+        for (byte b : original) {
+            if (b != 0) {
+                nonZeroBytes.add(b);
+            }
+        }
+
+        byte[] result = new byte[nonZeroBytes.size()];
+        for (int i = 0; i < nonZeroBytes.size(); i++) {
+            result[i] = nonZeroBytes.get(i);
+        }
+
+        return result;
     }
 }
